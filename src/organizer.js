@@ -9,6 +9,7 @@ class PhotoOrganizer {
     this.baseDirectory = path.resolve(options.baseDirectory);
     this.dryRun = options.dryRun || false;
     this.verbose = options.verbose || false;
+    this.debug = options.debug || false;
 
     // Supported image extensions
     this.imageExtensions = new Set([
@@ -35,6 +36,7 @@ class PhotoOrganizer {
       filesMoved: 0,
       jsonFilesRemoved: 0,
       emptyDirsRemoved: 0,
+      liveVideosRemoved: 0,
       errors: 0
     };
   }
@@ -134,15 +136,30 @@ class PhotoOrganizer {
     this.stats.imagesProcessed++;
 
     try {
-      // Extract EXIF data
-      const exifData = await exifr.parse(filePath);
-      let creationDate = this.extractCreationDate(exifData, filePath);
+      let creationDate = null;
+
+      // Try to extract EXIF data
+      try {
+        const exifData = await exifr.parse(filePath);
+        creationDate = this.extractCreationDate(exifData, filePath);
+      } catch (exifError) {
+        this.log(`Could not parse EXIF data for ${path.basename(filePath)}: ${exifError.message}`);
+
+        // For HEIC files, try filename pattern as fallback
+        const ext = path.extname(filePath).toLowerCase();
+        if (ext === '.heic' || ext === '.heif') {
+          creationDate = this.extractDateFromFilename(filePath);
+          if (creationDate) {
+            this.log(`Using filename pattern for HEIC file: ${path.basename(filePath)}`);
+          }
+        }
+      }
 
       if (!creationDate) {
-        // Fallback to file modification time if no EXIF date
+        // Fallback to file modification time if no EXIF date or filename pattern
         const stats = await fs.stat(filePath);
         creationDate = stats.mtime;
-        this.log(`No EXIF date found for ${path.basename(filePath)}, using file mtime`);
+        this.log(`No EXIF date or filename pattern found for ${path.basename(filePath)}, using file mtime`);
       }
 
       // Generate new filename and path
@@ -273,7 +290,7 @@ class PhotoOrganizer {
   }
 
   async generateNewPath(originalPath, creationDate) {
-    const ext = path.extname(originalPath);
+    const ext = path.extname(originalPath).toLowerCase();
     const year = creationDate.getFullYear();
     const month = String(creationDate.getMonth() + 1).padStart(2, '0');
     const day = String(creationDate.getDate()).padStart(2, '0');
@@ -327,6 +344,103 @@ class PhotoOrganizer {
     }
   }
 
+  async removeLiveVideos() {
+    const spinner = ora('Scanning for live videos...').start();
+
+    try {
+      const files = await this.scanFiles();
+      const liveVideos = await this.findLiveVideos(files);
+
+      spinner.succeed(`Found ${liveVideos.length} live videos to remove`);
+
+      if (liveVideos.length > 0) {
+        await this.deleteLiveVideos(liveVideos);
+      }
+    } catch (error) {
+      spinner.fail(`Error removing live videos: ${error.message}`);
+      this.stats.errors++;
+    }
+  }
+
+    async findLiveVideos(files) {
+    const liveVideos = [];
+    const photoFiles = new Map(); // Changed to Map to store photo file paths
+    const videoFiles = [];
+
+    // Separate photos and videos
+    for (const file of files) {
+      const ext = path.extname(file).toLowerCase();
+
+      if (this.imageExtensions.has(ext)) {
+        const baseName = path.basename(file, ext);
+        const dirName = path.dirname(file);
+        const baseKey = path.join(dirName, baseName);
+        photoFiles.set(baseKey, file); // Store the full photo path
+      } else if (ext === '.mov') {
+        videoFiles.push(file);
+      }
+    }
+
+    // Find .mov files that have matching photo names
+    for (const videoFile of videoFiles) {
+      const baseName = path.basename(videoFile, '.mov');
+      const dirName = path.dirname(videoFile);
+      const baseKey = path.join(dirName, baseName);
+
+      if (photoFiles.has(baseKey)) {
+        const matchedPhoto = photoFiles.get(baseKey);
+        liveVideos.push(videoFile);
+
+        if (this.debug) {
+          console.log(chalk.cyan(`🔍 Match found:`));
+          console.log(chalk.gray(`   Photo: ${path.relative(this.baseDirectory, matchedPhoto)}`));
+          console.log(chalk.gray(`   Video: ${path.relative(this.baseDirectory, videoFile)}`));
+        } else {
+          this.log(`Found live video: ${path.relative(this.baseDirectory, videoFile)}`);
+        }
+      }
+    }
+
+    if (this.debug && liveVideos.length > 0) {
+      console.log(chalk.yellow(`\n📋 Summary: ${liveVideos.length} live videos will be removed:`));
+      liveVideos.forEach((video, index) => {
+        console.log(chalk.gray(`   ${index + 1}. ${path.relative(this.baseDirectory, video)}`));
+      });
+      console.log('');
+    }
+
+    return liveVideos;
+  }
+
+  async deleteLiveVideos(liveVideos) {
+    const spinner = ora('Removing live videos...').start();
+
+    for (let i = 0; i < liveVideos.length; i++) {
+      const videoFile = liveVideos[i];
+      spinner.text = `Removing ${i + 1}/${liveVideos.length}: ${path.basename(videoFile)}`;
+
+      try {
+        if (this.dryRun) {
+          this.log(`Would remove live video: ${path.relative(this.baseDirectory, videoFile)}`);
+        } else {
+          this.log(`Removing live video: ${path.relative(this.baseDirectory, videoFile)}`);
+          await fs.remove(videoFile);
+        }
+
+        this.stats.liveVideosRemoved++;
+      } catch (error) {
+        this.stats.errors++;
+        console.error(chalk.red(`❌ Error removing ${videoFile}: ${error.message}`));
+      }
+    }
+
+    if (this.dryRun) {
+      spinner.succeed(`Would remove ${this.stats.liveVideosRemoved} live videos`);
+    } else {
+      spinner.succeed(`Removed ${this.stats.liveVideosRemoved} live videos`);
+    }
+  }
+
   async removeEmptyDirsRecursive(dir) {
     // Don't remove the base directory itself
     if (dir === this.baseDirectory) {
@@ -375,6 +489,7 @@ class PhotoOrganizer {
     console.log(chalk.green(`📁 Files moved: ${this.stats.filesMoved}`));
     console.log(chalk.green(`📝 Files renamed: ${this.stats.filesRenamed}`));
     console.log(chalk.green(`🗑️  JSON files removed: ${this.stats.jsonFilesRemoved}`));
+    console.log(chalk.green(`🎥 Live videos removed: ${this.stats.liveVideosRemoved}`));
     console.log(chalk.green(`📂 Empty dirs removed: ${this.stats.emptyDirsRemoved}`));
 
     if (this.stats.errors > 0) {
@@ -389,6 +504,45 @@ class PhotoOrganizer {
   log(message) {
     if (this.verbose) {
       console.log(chalk.gray(`📝 ${message}`));
+    }
+  }
+
+  async cleanupLiveVideos() {
+    // Validate base directory exists
+    if (!await fs.pathExists(this.baseDirectory)) {
+      throw new Error(`Directory does not exist: ${this.baseDirectory}`);
+    }
+
+    this.log(`Starting live video cleanup in: ${this.baseDirectory}`);
+
+    // Reset stats for this operation
+    this.stats = {
+      imagesProcessed: 0,
+      videosProcessed: 0,
+      filesRenamed: 0,
+      filesMoved: 0,
+      jsonFilesRemoved: 0,
+      emptyDirsRemoved: 0,
+      liveVideosRemoved: 0,
+      errors: 0
+    };
+
+    await this.removeLiveVideos();
+    this.showLiveVideoStats();
+  }
+
+  showLiveVideoStats() {
+    console.log('\n' + chalk.blue.bold('📊 Live Video Cleanup Summary:'));
+
+    if (this.dryRun) {
+      console.log(chalk.yellow(`🎥 Live videos that would be removed: ${this.stats.liveVideosRemoved}`));
+      console.log(chalk.yellow('\n🔍 This was a dry run - no files were actually modified'));
+    } else {
+      console.log(chalk.green(`🎥 Live videos removed: ${this.stats.liveVideosRemoved}`));
+    }
+
+    if (this.stats.errors > 0) {
+      console.log(chalk.red(`❌ Errors: ${this.stats.errors}`));
     }
   }
 }
