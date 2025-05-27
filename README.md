@@ -13,6 +13,7 @@ A powerful command-line tool to organize and rename photos and videos based on t
 - ✅ **Comprehensive Statistics**: Detailed reporting of all operations
 - ✅ **Error Recovery**: Robust error handling with cleanup on failures
 - ✅ **Interactive Controls**: Quit anytime with 'Q' or Ctrl+C in progressive mode
+- ✅ **Conflict-Safe Processing**: Automatic file renaming prevents overwriting existing photos
 
 ## Installation
 
@@ -82,8 +83,15 @@ When using `--progressive` mode:
 1. **Extraction**: Each zip file is extracted to a temporary directory
 2. **Detection**: Automatically finds the Google Photos folder within Takeout structure
 3. **Organization**: Organizes photos by date using the same logic as the main command
-4. **Merging**: Copies organized files to the target directory (incremental, no duplicates)
+4. **Conflict-Safe Merging**: Copies organized files to the target directory with automatic conflict resolution
 5. **Cleanup**: Removes temporary files and original zip files after successful processing
+
+#### Conflict Resolution
+When files with the same name exist in the target directory, the tool automatically renames the incoming file to avoid overwriting existing photos. For example:
+- Existing: `2023-01-15_001.jpg`
+- Incoming: `2023-01-15_001.jpg` → Renamed to: `2023-01-15_002.jpg`
+
+This ensures no photos are ever lost or overwritten during batch processing.
 
 ## Supported File Formats
 
@@ -159,6 +167,7 @@ All commands provide comprehensive statistics:
 - **Empty directories removed**
 - **Errors encountered**
 - **Files copied to target** (batch mode)
+- **Files renamed to avoid conflicts** (batch mode)
 
 ## Error Handling
 
