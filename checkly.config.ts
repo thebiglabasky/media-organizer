@@ -11,7 +11,7 @@ const config = defineConfig({
   */
   logicalId: 'photo-organizer',
   /* An optional URL to your Git repo */
-  repoUrl: 'https://github.com/checkly/checkly-cli',
+  repoUrl: 'https://github.com/thebiglabasky/media-organizer',
   /* Sets default values for Checks */
   checks: {
     /* A default for how often your Check should run in minutes */

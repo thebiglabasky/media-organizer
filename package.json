@@ -29,7 +29,7 @@
     "yauzl": "^2.10.0"
   },
   "devDependencies": {
-    "checkly": "latest",
+    "checkly": "8.16.0",
     "jiti": "^2"
   }
 }
